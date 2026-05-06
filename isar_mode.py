@@ -580,6 +580,31 @@ def render(self) -> None:
     self.spin_plot_ymin.blockSignals(False)
     self.spin_plot_ymax.blockSignals(False)
 
+    # Auto-fit the z (dB) spinboxes to the actual image dynamic range only
+    # when the existing clamp falls entirely outside the data — otherwise the
+    # algorithm/window change would leave a dead window producing a uniform
+    # image. Track a 60 dB display range below the peak by default.
+    img_min = float("inf")
+    img_max = float("-inf")
+    for br in band_results:
+        finite = br["isar_display"][np.isfinite(br["isar_display"])]
+        if finite.size:
+            img_min = min(img_min, float(finite.min()))
+            img_max = max(img_max, float(finite.max()))
+    if np.isfinite(img_min) and np.isfinite(img_max) and img_max > img_min:
+        cur_zmin = self.spin_plot_zmin.value()
+        cur_zmax = self.spin_plot_zmax.value()
+        clamp_active = cur_zmin < cur_zmax
+        clamp_dead = clamp_active and (cur_zmax < img_min or cur_zmin > img_max)
+        if not clamp_active or clamp_dead:
+            display_floor = img_max - 60.0 if not self._plot_scale_is_linear() else img_min
+            self.spin_plot_zmin.blockSignals(True)
+            self.spin_plot_zmax.blockSignals(True)
+            self.spin_plot_zmin.setValue(display_floor)
+            self.spin_plot_zmax.setValue(img_max)
+            self.spin_plot_zmin.blockSignals(False)
+            self.spin_plot_zmax.blockSignals(False)
+
     self._apply_plot_limits()
 
     # Surface any resampling that happened so the user knows their input
