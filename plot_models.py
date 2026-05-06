@@ -49,6 +49,8 @@ class PlotContext:
     chk_colormap_invert: QCheckBox
     combo_isar_window: QComboBox
     combo_isar_units: QComboBox
+    combo_isar_algorithm: QComboBox
+    combo_isar_pad: QComboBox
     btn_plot_bg: QToolButton
     btn_plot_grid: QToolButton
     btn_plot_text: QToolButton

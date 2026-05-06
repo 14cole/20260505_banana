@@ -713,6 +713,8 @@ class GrimCutWindow(DatasetOpsMixin, PlotOpsMixin, QMainWindow):
             context.chk_colormap_invert.toggled.connect(self._on_colormap_changed)
             context.combo_isar_window.currentIndexChanged.connect(self._on_isar_window_changed)
             context.combo_isar_units.currentIndexChanged.connect(self._on_isar_window_changed)
+            context.combo_isar_algorithm.currentIndexChanged.connect(self._on_isar_window_changed)
+            context.combo_isar_pad.currentIndexChanged.connect(self._on_isar_window_changed)
             context.spin_isar3d_max_az.valueChanged.connect(self._on_isar_3d_style_changed)
             context.spin_isar3d_max_el.valueChanged.connect(self._on_isar_3d_style_changed)
             context.spin_isar3d_max_freq.valueChanged.connect(self._on_isar_3d_style_changed)
@@ -921,12 +923,29 @@ class GrimCutWindow(DatasetOpsMixin, PlotOpsMixin, QMainWindow):
         settings_layout.addWidget(spin_isar3d_point_size, row, 1)
         settings_layout.addWidget(QLabel("ISAR Window"), row, 2)
         combo_isar_window = QComboBox()
-        combo_isar_window.addItems(["Hanning", "Hamming", "Blackman", "Rectangular"])
+        combo_isar_window.addItems([
+            "Hanning",
+            "Hamming",
+            "Blackman",
+            "Blackman-Harris",
+            "Kaiser β=15",
+            "Rectangular",
+        ])
         settings_layout.addWidget(combo_isar_window, row, 3)
         settings_layout.addWidget(QLabel("ISAR Units"), row, 4)
         combo_isar_units = QComboBox()
         combo_isar_units.addItems(["m", "in", "ft"])
         settings_layout.addWidget(combo_isar_units, row, 5)
+        row += 1
+
+        settings_layout.addWidget(QLabel("ISAR Algorithm"), row, 0)
+        combo_isar_algorithm = QComboBox()
+        combo_isar_algorithm.addItems(["Decoupled FFT", "Polar Format"])
+        settings_layout.addWidget(combo_isar_algorithm, row, 1)
+        settings_layout.addWidget(QLabel("Cross-range Pad"), row, 2)
+        combo_isar_pad = QComboBox()
+        combo_isar_pad.addItems(["None", "Match range", "Next power of 2"])
+        settings_layout.addWidget(combo_isar_pad, row, 3)
         row += 1
 
         chk_plot_grid_visible = QCheckBox("Show Grid")
@@ -1030,6 +1049,8 @@ class GrimCutWindow(DatasetOpsMixin, PlotOpsMixin, QMainWindow):
             chk_colormap_invert=chk_colormap_invert,
             combo_isar_window=combo_isar_window,
             combo_isar_units=combo_isar_units,
+            combo_isar_algorithm=combo_isar_algorithm,
+            combo_isar_pad=combo_isar_pad,
             btn_plot_bg=btn_plot_bg,
             btn_plot_grid=btn_plot_grid,
             btn_plot_text=btn_plot_text,

@@ -879,6 +879,19 @@ class PlotOpsMixin:
             return np.hamming(n)
         if name == "Blackman":
             return np.blackman(n)
+        if name == "Blackman-Harris":
+            # 4-term Blackman-Harris, peak sidelobe ~ -92 dB.
+            i = np.arange(n)
+            x = 2.0 * np.pi * i / (n - 1)
+            return (
+                0.35875
+                - 0.48829 * np.cos(x)
+                + 0.14128 * np.cos(2.0 * x)
+                - 0.01168 * np.cos(3.0 * x)
+            )
+        if name.startswith("Kaiser"):
+            # Kaiser β=15 — peak sidelobe ~ -110 dB.
+            return np.kaiser(n, 15.0)
         if name == "Rectangular":
             return np.ones(n)
         return np.hanning(n)

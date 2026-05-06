@@ -16,7 +16,6 @@ def _unit_to_hz_scale(unit: str) -> float:
     return 1e9
 
 
-# Length-unit conversion factors from meters → target unit.
 _LENGTH_UNIT_FACTORS = {
     "m": 1.0,
     "in": 1.0 / 0.0254,
@@ -30,7 +29,6 @@ def _length_unit(name: str | None) -> tuple[str, float]:
 
 
 def _split_into_bands(indices: list[int]) -> list[list[int]]:
-    """Split a sorted list of indices into contiguous runs."""
     if not indices:
         return []
     bands: list[list[int]] = []
@@ -45,6 +43,180 @@ def _split_into_bands(indices: list[int]) -> list[list[int]]:
     return bands
 
 
+def _next_pow_two(n: int) -> int:
+    n = max(int(n), 1)
+    return 1 << (n - 1).bit_length()
+
+
+def _resolve_pad(name: str | None, n_az: int, n_freq: int) -> int:
+    label = (name or "None").strip().lower()
+    if label == "match range":
+        return max(n_az, n_freq)
+    if label.startswith("next power"):
+        return max(_next_pow_two(n_az), n_az)
+    return n_az
+
+
+def _pfa_polar_to_cart(
+    rcs_polar: np.ndarray,
+    theta: np.ndarray,
+    k: np.ndarray,
+    n_kx: int,
+    n_ky: int,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Two-stage 1-D interpolation from polar (theta, k) to Cartesian (kx, ky).
+
+    Args:
+        rcs_polar: complex (N_az, N_freq) — sample at angle theta[j] and wavenumber k[i].
+        theta: (N_az,) radians, ascending.
+        k: (N_freq,) wavenumbers (rad/m), ascending.
+        n_kx, n_ky: target Cartesian grid dimensions.
+
+    Returns:
+        cart: complex (n_ky, n_kx) on a uniform Cartesian (kx, ky) grid.
+        kx_grid: (n_kx,) ascending.
+        ky_grid: (n_ky,) ascending.
+    """
+    n_az, n_freq = rcs_polar.shape
+    if n_az < 2 or n_freq < 2:
+        raise ValueError("PFA needs at least 2 angles and 2 frequencies")
+
+    # Bounding box of the polar arc sector in Cartesian k-space.
+    th_max_abs = float(np.max(np.abs(theta)))
+    kmax = float(k.max())
+    kmin = float(k.min())
+    kx_max = 2.0 * kmax * np.sin(th_max_abs)
+    kx_min = -kx_max if theta.min() < 0 else 2.0 * kmin * np.sin(theta.min())
+    ky_min = 2.0 * kmin * np.cos(th_max_abs)
+    ky_max = 2.0 * kmax  # at theta=0, cos=1
+
+    kx_grid = np.linspace(kx_min, kx_max, n_kx)
+    ky_grid = np.linspace(ky_min, ky_max, n_ky)
+
+    # Stage 1: For each azimuth row, resample along ky onto the common ky_grid.
+    # Native ky for row j is 2·k·cos(theta[j]) (uniform, since k is uniform).
+    intermediate = np.zeros((n_az, n_ky), dtype=np.complex128)
+    for j in range(n_az):
+        ky_native = 2.0 * k * np.cos(theta[j])
+        if ky_native[0] > ky_native[-1]:
+            ky_native = ky_native[::-1]
+            row = rcs_polar[j, ::-1]
+        else:
+            row = rcs_polar[j, :]
+        intermediate[j, :] = (
+            np.interp(ky_grid, ky_native, row.real, left=0.0, right=0.0)
+            + 1j * np.interp(ky_grid, ky_native, row.imag, left=0.0, right=0.0)
+        )
+
+    # Stage 2: For each ky_grid[q], resample along kx onto the common kx_grid.
+    # Native kx at row j (after stage 1) is ky_grid[q] · tan(theta[j]).
+    cart = np.zeros((n_ky, n_kx), dtype=np.complex128)
+    tan_theta = np.tan(theta)
+    for q in range(n_ky):
+        kx_native = ky_grid[q] * tan_theta
+        if kx_native[0] > kx_native[-1]:
+            kx_native = kx_native[::-1]
+            col = intermediate[::-1, q]
+        else:
+            col = intermediate[:, q]
+        cart[q, :] = (
+            np.interp(kx_grid, kx_native, col.real, left=0.0, right=0.0)
+            + 1j * np.interp(kx_grid, kx_native, col.imag, left=0.0, right=0.0)
+        )
+
+    return cart, kx_grid, ky_grid
+
+
+def _compute_band_decoupled(
+    self,
+    rcs_polar: np.ndarray,
+    theta: np.ndarray,
+    freq_hz: np.ndarray,
+    df: float,
+    n_kx: int,
+    unit_scale: float,
+):
+    """Classical decoupled-FFT ISAR for one band, with optional cross-range pad."""
+    n_az = theta.size
+    n_freq = freq_hz.size
+
+    win_az_native = self._isar_window(n_az)
+    win_freq = self._isar_window(n_freq)
+    rcs_windowed = rcs_polar * np.outer(win_az_native, win_freq)
+
+    # Optional zero-pad along azimuth to oversample cross-range.
+    if n_kx > n_az:
+        pad_total = n_kx - n_az
+        pad_lead = pad_total // 2
+        pad_trail = pad_total - pad_lead
+        rcs_windowed = np.pad(
+            rcs_windowed, ((pad_lead, pad_trail), (0, 0)), mode="constant"
+        )
+    else:
+        n_kx = n_az
+
+    # Double IFFT: ifft over freq → range, ifft over az → cross-range.
+    range_az = np.fft.ifft(rcs_windowed, axis=1)
+    isar_complex = np.fft.ifft(range_az, axis=0)
+    isar_complex = np.fft.fftshift(isar_complex, axes=(0, 1))
+
+    c0 = 299_792_458.0
+
+    # Native dθ from the original azimuth samples (padding only adds zeros,
+    # doesn't change physical sample spacing).
+    dtheta = float(np.mean(np.diff(theta)))
+
+    y_range = np.fft.fftshift(np.fft.fftfreq(n_freq, d=df)) * (c0 / 2.0) * unit_scale
+    cross_freq_grid_d = (np.arange(n_kx) - n_kx // 2) / (n_az * dtheta)
+    f_c = float(np.mean(freq_hz))
+    x_range = cross_freq_grid_d * (c0 / (2.0 * max(f_c, 1.0))) * unit_scale
+
+    return isar_complex, x_range, y_range
+
+
+def _compute_band_pfa(
+    self,
+    rcs_polar: np.ndarray,
+    theta: np.ndarray,
+    freq_hz: np.ndarray,
+    n_kx: int,
+    unit_scale: float,
+):
+    """Polar-Format Algorithm: polar→Cartesian remap, window, 2-D IFFT."""
+    n_az = theta.size
+    n_freq = freq_hz.size
+
+    c0 = 299_792_458.0
+    k = 2.0 * np.pi * freq_hz / c0  # (n_freq,) wavenumbers
+
+    n_ky = n_freq
+    n_kx_eff = max(n_kx, n_az)
+
+    cart, kx_grid, ky_grid = _pfa_polar_to_cart(rcs_polar, theta, k, n_kx_eff, n_ky)
+
+    # Window in rectangular k-space (after resampling).
+    win_kx = self._isar_window(n_kx_eff)
+    win_ky = self._isar_window(n_ky)
+    cart_windowed = cart * np.outer(win_ky, win_kx)
+
+    # 2-D IFFT. cart has shape (n_ky, n_kx_eff); IFFT preserves shape.
+    image = np.fft.ifft2(np.fft.ifftshift(cart_windowed))
+    image = np.fft.fftshift(image)
+
+    # Transpose to (n_kx_eff, n_ky) so callers see (cross-range, range), matching
+    # the shape convention used by _compute_band_decoupled.
+    image = image.T
+
+    dkx = kx_grid[1] - kx_grid[0]
+    dky = ky_grid[1] - ky_grid[0]
+    dx = 2.0 * np.pi / (n_kx_eff * dkx)
+    dy = 2.0 * np.pi / (n_ky * dky)
+    x_range = (np.arange(n_kx_eff) - n_kx_eff // 2) * dx * unit_scale
+    y_range = (np.arange(n_ky) - n_ky // 2) * dy * unit_scale
+
+    return image, x_range, y_range
+
+
 def _compute_band(
     self,
     band_az_indices: list[int],
@@ -54,23 +226,17 @@ def _compute_band(
     freq_hz: np.ndarray,
     df: float,
     unit_scale: float,
+    algorithm: str,
+    pad_target: int,
 ):
-    """Compute ISAR image, range, and cross-range axes for one azimuth band.
-
-    Returns dict with keys: az_values, isar_display, x_range, y_range
-    on success, or a string error message on failure.
-    """
     band_az_values = self.active_dataset.azimuths[band_az_indices]
     order = np.argsort(band_az_values)
     sorted_band_indices = [band_az_indices[i] for i in order]
     az_values = band_az_values[order].astype(float)
-    theta_rad = np.deg2rad(az_values)
+    theta = np.deg2rad(az_values)
 
-    if not np.all(np.isfinite(theta_rad)) or np.any(np.diff(theta_rad) <= 0):
+    if not np.all(np.isfinite(theta)) or np.any(np.diff(theta) <= 0):
         return "Azimuth samples must be strictly increasing within a band."
-    dtheta = float(np.mean(np.diff(theta_rad)))
-    if dtheta <= 0.0:
-        return "ISAR imaging requires increasing azimuth samples."
 
     rcs_slice = self.active_dataset.rcs[
         np.ix_(sorted_band_indices, [elev_idx], freq_indices_sorted, [pol_idx])
@@ -82,28 +248,22 @@ def _compute_band(
         return "ISAR imaging requires phase-aware samples; selected data has no finite rcs_phase."
     rcs_slice = np.where(np.isfinite(rcs_slice), rcs_slice, 0.0)
 
-    win_az = self._isar_window(theta_rad.size)
-    win_freq = self._isar_window(freq_hz.size)
-    rcs_windowed = rcs_slice * np.outer(win_az, win_freq)
+    n_kx = max(pad_target, theta.size)
 
-    # Double IFFT (matched sign convention): IFFT over frequency → range,
-    # IFFT over azimuth → cross-range. Using fft on the second axis would
-    # mirror the cross-range image left↔right.
-    range_az_fft = np.fft.ifft(rcs_windowed, axis=1)
-    isar_complex = np.fft.ifft(range_az_fft, axis=0)
-    isar_complex = np.fft.fftshift(isar_complex, axes=(0, 1))
+    if algorithm == "polar format":
+        complex_image, x_range, y_range = _compute_band_pfa(
+            self, rcs_slice, theta, freq_hz, n_kx, unit_scale
+        )
+    else:
+        complex_image, x_range, y_range = _compute_band_decoupled(
+            self, rcs_slice, theta, freq_hz, df, n_kx, unit_scale
+        )
 
-    magnitude = np.abs(isar_complex)
+    magnitude = np.abs(complex_image)
     if self._plot_scale_is_linear():
         isar_display = magnitude
     else:
         isar_display = self.active_dataset.rcs_to_dbsm(magnitude)
-
-    c0 = 299_792_458.0
-    y_range = np.fft.fftshift(np.fft.fftfreq(freq_hz.size, d=df)) * (c0 / 2.0) * unit_scale
-    cross_freq = np.fft.fftshift(np.fft.fftfreq(theta_rad.size, d=dtheta))
-    center_freq_hz = float(np.mean(freq_hz))
-    x_range = cross_freq * (c0 / (2.0 * max(center_freq_hz, 1.0))) * unit_scale
 
     return {
         "az_values": az_values,
@@ -146,7 +306,6 @@ def render(self) -> None:
         )
         return
 
-    # Validate frequency axis (shared across all bands).
     freq_values_full = self.active_dataset.frequencies[freq_indices]
     freq_order = np.argsort(freq_values_full)
     freq_indices_sorted = [freq_indices[i] for i in freq_order]
@@ -167,8 +326,16 @@ def render(self) -> None:
     units_combo = getattr(self, "combo_isar_units", None)
     unit_name, unit_scale = _length_unit(units_combo.currentText() if units_combo else "m")
 
+    algo_combo = getattr(self, "combo_isar_algorithm", None)
+    algorithm = (algo_combo.currentText() if algo_combo else "Decoupled FFT").strip().lower()
+
+    pad_combo = getattr(self, "combo_isar_pad", None)
+    pad_choice = pad_combo.currentText() if pad_combo else "None"
+
     band_results = []
     for band_az_indices in bands:
+        n_az_band = len(band_az_indices)
+        pad_target = _resolve_pad(pad_choice, n_az_band, len(freq_indices_sorted))
         result = _compute_band(
             self,
             band_az_indices,
@@ -178,6 +345,8 @@ def render(self) -> None:
             freq_hz,
             df,
             unit_scale,
+            algorithm,
+            pad_target,
         )
         if isinstance(result, str):
             self.status.showMessage(result)
@@ -186,9 +355,6 @@ def render(self) -> None:
 
     n_bands = len(band_results)
 
-    # Build (or rebuild) axes layout. We always rebuild on a fresh render so
-    # the panel count matches the band count; "hold" is not meaningful when
-    # the layout itself depends on the selection.
     self._remove_colorbar()
     self.plot_figure.clear()
     if n_bands == 1:
@@ -237,7 +403,8 @@ def render(self) -> None:
 
     elev_value = self.active_dataset.elevations[elev_idx]
     pol_value = self.active_dataset.polarizations[pol_idx]
-    fig_title = f"ISAR Image | Elevation {elev_value} deg | Pol {pol_value}"
+    algo_label = "PFA" if algorithm == "polar format" else "Decoupled FFT"
+    fig_title = f"ISAR Image | Elevation {elev_value} deg | Pol {pol_value} | {algo_label}"
     if n_bands > 1:
         self.plot_figure.suptitle(fig_title, color=self._current_plot_text())
     else:
@@ -274,6 +441,6 @@ def render(self) -> None:
 
     self._apply_plot_limits()
     if n_bands == 1:
-        self.status.showMessage("ISAR image updated.")
+        self.status.showMessage(f"ISAR image updated ({algo_label}).")
     else:
-        self.status.showMessage(f"ISAR image updated ({n_bands} bands).")
+        self.status.showMessage(f"ISAR image updated ({algo_label}, {n_bands} bands).")
