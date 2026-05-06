@@ -1354,22 +1354,26 @@ class DatasetOpsMixin:
         self._on_polarization_selection_changed()
 
     def _fill_list(self, widget: QListWidget, values, indices=None) -> None:
+        widget.setUpdatesEnabled(False)
         widget.blockSignals(True)
-        widget.clear()
-        if indices is None:
-            indices = list(range(len(values)))
-        else:
-            indices = [int(idx) for idx in indices]
-        if widget is getattr(self, "list_pol", None):
-            indices = _sorted_polarization_indices(values, indices)
-        for idx in indices:
-            value = values[idx]
-            item = QListWidgetItem(str(value))
-            item.setFlags(item.flags() | Qt.ItemIsEditable)
-            item.setData(Qt.UserRole, value)
-            item.setData(Qt.UserRole + 1, int(idx))
-            widget.addItem(item)
-        widget.blockSignals(False)
+        try:
+            widget.clear()
+            if indices is None:
+                indices = list(range(len(values)))
+            else:
+                indices = [int(idx) for idx in indices]
+            if widget is getattr(self, "list_pol", None):
+                indices = _sorted_polarization_indices(values, indices)
+            for idx in indices:
+                value = values[idx]
+                item = QListWidgetItem(str(value))
+                item.setFlags(item.flags() | Qt.ItemIsEditable)
+                item.setData(Qt.UserRole, value)
+                item.setData(Qt.UserRole + 1, int(idx))
+                widget.addItem(item)
+        finally:
+            widget.blockSignals(False)
+            widget.setUpdatesEnabled(True)
 
     def _clear_param_lists(self) -> None:
         for widget in (self.list_pol, self.list_freq, self.list_elev, self.list_az):

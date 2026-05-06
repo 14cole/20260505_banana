@@ -944,7 +944,7 @@ class GrimCutWindow(DatasetOpsMixin, PlotOpsMixin, QMainWindow):
         settings_layout.addWidget(combo_isar_algorithm, row, 1)
         settings_layout.addWidget(QLabel("Cross-range Pad"), row, 2)
         combo_isar_pad = QComboBox()
-        combo_isar_pad.addItems(["None", "Match range", "Next power of 2"])
+        combo_isar_pad.addItems(["Auto", "Match range", "Next power of 2", "None"])
         settings_layout.addWidget(combo_isar_pad, row, 3)
         row += 1
 

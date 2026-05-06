@@ -48,12 +48,42 @@ def _next_pow_two(n: int) -> int:
     return 1 << (n - 1).bit_length()
 
 
-def _resolve_pad(name: str | None, n_az: int, n_freq: int) -> int:
-    label = (name or "None").strip().lower()
+def _resolve_pad(
+    name: str | None,
+    n_az: int,
+    n_freq: int,
+    *,
+    algorithm: str = "decoupled fft",
+    theta: np.ndarray | None = None,
+    freq_hz: np.ndarray | None = None,
+) -> int:
+    """Resolve the cross-range pad selection into an integer N_kx target.
+
+    For decoupled FFT, "Auto" and "None" both mean N_kx = N_az (no pad).
+    For PFA, "Auto" computes the N_kx needed to give the same scene extent
+    that decoupled FFT would produce on the same data; "None" leaves N_kx
+    at N_az and the resulting PFA image will be cramped to the polar k-space
+    bounding box.
+    """
+    label = (name or "Auto").strip().lower()
     if label == "match range":
         return max(n_az, n_freq)
     if label.startswith("next power"):
         return max(_next_pow_two(n_az), n_az)
+    if label == "none":
+        return n_az
+    # "Auto" — sane default per algorithm
+    if algorithm == "polar format" and theta is not None and freq_hz is not None and theta.size >= 2:
+        theta_sorted = np.sort(np.asarray(theta, dtype=float))
+        theta_max_abs = float(np.max(np.abs(theta_sorted)))
+        dtheta = float(np.mean(np.diff(theta_sorted)))
+        f_c = float(np.mean(freq_hz))
+        f_max = float(np.max(freq_hz))
+        if dtheta > 0.0 and f_c > 0.0 and theta_max_abs > 0.0:
+            # Match decoupled-FFT scene extent: c/(2·f_c·dθ) = 2π·N_kx/kx_span,
+            # with kx_span = 4·k_max·sin(θ_max). Solve for N_kx.
+            n_auto = int(np.ceil(2.0 * f_max * np.sin(theta_max_abs) / (f_c * dtheta)))
+            return max(min(n_auto, 8192), n_az)
     return n_az
 
 
@@ -227,7 +257,7 @@ def _compute_band(
     df: float,
     unit_scale: float,
     algorithm: str,
-    pad_target: int,
+    pad_choice: str,
 ):
     band_az_values = self.active_dataset.azimuths[band_az_indices]
     order = np.argsort(band_az_values)
@@ -248,6 +278,14 @@ def _compute_band(
         return "ISAR imaging requires phase-aware samples; selected data has no finite rcs_phase."
     rcs_slice = np.where(np.isfinite(rcs_slice), rcs_slice, 0.0)
 
+    pad_target = _resolve_pad(
+        pad_choice,
+        theta.size,
+        len(freq_indices_sorted),
+        algorithm=algorithm,
+        theta=theta,
+        freq_hz=freq_hz,
+    )
     n_kx = max(pad_target, theta.size)
 
     if algorithm == "polar format":
@@ -330,12 +368,10 @@ def render(self) -> None:
     algorithm = (algo_combo.currentText() if algo_combo else "Decoupled FFT").strip().lower()
 
     pad_combo = getattr(self, "combo_isar_pad", None)
-    pad_choice = pad_combo.currentText() if pad_combo else "None"
+    pad_choice = pad_combo.currentText() if pad_combo else "Auto"
 
     band_results = []
     for band_az_indices in bands:
-        n_az_band = len(band_az_indices)
-        pad_target = _resolve_pad(pad_choice, n_az_band, len(freq_indices_sorted))
         result = _compute_band(
             self,
             band_az_indices,
@@ -346,7 +382,7 @@ def render(self) -> None:
             df,
             unit_scale,
             algorithm,
-            pad_target,
+            pad_choice,
         )
         if isinstance(result, str):
             self.status.showMessage(result)
@@ -381,20 +417,27 @@ def render(self) -> None:
     overall_y_min = float("inf")
     overall_y_max = float("-inf")
     for ax, br in zip(active_axes, band_results):
-        mesh = ax.pcolormesh(
-            br["x_range"],
-            br["y_range"],
+        x_min = float(br["x_range"].min())
+        x_max = float(br["x_range"].max())
+        y_min = float(br["y_range"].min())
+        y_max = float(br["y_range"].max())
+        # imshow on a uniform grid is several times faster than pcolormesh
+        # for big arrays (1601-frequency datasets feel laggy with pcolormesh).
+        mesh = ax.imshow(
             br["isar_display"].T,
-            shading="auto",
+            extent=[x_min, x_max, y_min, y_max],
+            origin="lower",
+            aspect="auto",
+            interpolation="nearest",
             cmap=cmap,
             vmin=zmin if use_clamp else None,
             vmax=zmax if use_clamp else None,
         )
         last_mesh = mesh
-        overall_x_min = min(overall_x_min, float(br["x_range"].min()))
-        overall_x_max = max(overall_x_max, float(br["x_range"].max()))
-        overall_y_min = min(overall_y_min, float(br["y_range"].min()))
-        overall_y_max = max(overall_y_max, float(br["y_range"].max()))
+        overall_x_min = min(overall_x_min, x_min)
+        overall_x_max = max(overall_x_max, x_max)
+        overall_y_min = min(overall_y_min, y_min)
+        overall_y_max = max(overall_y_max, y_max)
         if n_bands > 1:
             ax.set_title(
                 f"{float(br['az_values'][0]):g}°–{float(br['az_values'][-1]):g}°",
