@@ -38,13 +38,6 @@ class PlotContext:
     combo_colormap: QComboBox
     chk_colorbar: QCheckBox
     chk_colorbar_shared: QCheckBox
-    chk_isar3d_auto_thin: QCheckBox
-    spin_isar3d_max_az: QDoubleSpinBox
-    spin_isar3d_max_el: QDoubleSpinBox
-    spin_isar3d_max_freq: QDoubleSpinBox
-    spin_isar3d_max_voxels: QDoubleSpinBox
-    spin_isar3d_quantile: QDoubleSpinBox
-    spin_isar3d_point_size: QDoubleSpinBox
     chk_plot_grid_visible: QCheckBox
     chk_colormap_invert: QCheckBox
     combo_isar_window: QComboBox

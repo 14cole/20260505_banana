@@ -19,7 +19,6 @@ from plot_modes import (
     compare_mode,
     elevation_sweep_mode,
     frequency_mode,
-    isar_3d_mode,
     isar_mode,
     waterfall_mode,
 )
@@ -107,8 +106,6 @@ class PlotOpsMixin:
             self._plot_waterfall()
         elif self.last_plot_mode == "isar_image":
             self._plot_isar_image()
-        elif self.last_plot_mode == "isar_3d":
-            self._plot_isar_3d()
         elif self.last_plot_mode == "compare":
             self._plot_compare()
 
@@ -125,12 +122,10 @@ class PlotOpsMixin:
             self._plot_isar_image()
 
     def _on_waterfall_style_changed(self) -> None:
-        if self.last_plot_mode not in ("waterfall", "isar_image", "isar_3d"):
+        if self.last_plot_mode not in ("waterfall", "isar_image"):
             return
         if self.last_plot_mode == "waterfall":
             self._plot_waterfall()
-        elif self.last_plot_mode == "isar_3d":
-            self._plot_isar_3d()
         else:
             self._plot_isar_image()
 
@@ -141,9 +136,6 @@ class PlotOpsMixin:
         if self.last_plot_mode == "isar_image":
             self._plot_isar_image()
             return
-        if self.last_plot_mode == "isar_3d":
-            self._plot_isar_3d()
-            return
         if self.pbp_fill_mode not in ("heatmap_rcs", "heatmap_density"):
             return
         if self.last_plot_mode == "azimuth_rect":
@@ -152,21 +144,6 @@ class PlotOpsMixin:
             self._plot_azimuth_polar()
         elif self.last_plot_mode == "frequency":
             self._plot_frequency()
-
-    def _update_isar3d_thin_controls(self) -> None:
-        enabled = bool(self.chk_isar3d_auto_thin.isChecked())
-        self.spin_isar3d_max_az.setEnabled(enabled)
-        self.spin_isar3d_max_el.setEnabled(enabled)
-        self.spin_isar3d_max_freq.setEnabled(enabled)
-
-    def _on_isar3d_auto_thin_toggled(self) -> None:
-        self._update_isar3d_thin_controls()
-        if self.last_plot_mode == "isar_3d":
-            self._plot_isar_3d()
-
-    def _on_isar_3d_style_changed(self) -> None:
-        if self.last_plot_mode == "isar_3d":
-            self._plot_isar_3d()
 
     def _on_plot_scale_changed(self) -> None:
         if self.last_plot_mode is None:
@@ -188,8 +165,6 @@ class PlotOpsMixin:
             self._plot_waterfall()
         elif self.last_plot_mode == "isar_image":
             self._plot_isar_image()
-        elif self.last_plot_mode == "isar_3d":
-            self._plot_isar_3d()
 
     def _plot_scale_mode(self) -> str:
         scale = self.combo_plot_scale.currentData()
@@ -903,8 +878,6 @@ class PlotOpsMixin:
     def _on_isar_window_changed(self) -> None:
         if self.last_plot_mode == "isar_image":
             self._plot_isar_image()
-        elif self.last_plot_mode == "isar_3d":
-            self._plot_isar_3d()
 
     def _fit_polar_x_range(self) -> tuple[float, float]:
         theta_values: list[np.ndarray] = []
@@ -1307,9 +1280,6 @@ class PlotOpsMixin:
 
     def _plot_isar_image(self) -> None:
         isar_mode.render(self)
-
-    def _plot_isar_3d(self) -> None:
-        isar_3d_mode.render(self)
 
     def _plot_waterfall(self) -> None:
         waterfall_mode.render(self)

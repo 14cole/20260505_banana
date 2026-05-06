@@ -943,66 +943,6 @@ class RcsGrid:
             rcs_domain="power_phase",
         )
 
-    def medianize_azimuth(self, window_deg: float, slide_deg: float):
-        """Sliding-window median over azimuth (in degrees).
-
-        Window is centered at each output azimuth location. Output azimuths run
-        from min(azimuth) to max(azimuth) with the requested slide step.
-        """
-        window = float(window_deg)
-        slide = float(slide_deg)
-        if not np.isfinite(window) or window <= 0.0:
-            raise ValueError("medianize window must be finite and > 0")
-        if not np.isfinite(slide) or slide <= 0.0:
-            raise ValueError("medianize slide must be finite and > 0")
-
-        az = np.asarray(self.azimuths, dtype=float)
-        if az.size == 0:
-            raise ValueError("dataset has no azimuth samples")
-        if not np.all(np.isfinite(az)):
-            raise ValueError("medianize requires finite azimuth values")
-
-        order = np.argsort(az, kind="stable")
-        az_sorted = az[order]
-        pwr_sorted = self.rcs_power[order, :, :, :]
-
-        start = float(az_sorted[0])
-        stop = float(az_sorted[-1])
-        tol = 1e-9
-        count = int(np.floor((stop - start) / slide + tol)) + 1
-        out_az = start + np.arange(count, dtype=float) * slide
-        if out_az.size == 0:
-            out_az = np.asarray([start], dtype=float)
-        if out_az[-1] < stop - tol:
-            out_az = np.append(out_az, stop)
-
-        out_shape = (out_az.size,) + pwr_sorted.shape[1:]
-        out_power = np.full(out_shape, np.nan, dtype=np.float32)
-        out_phase = np.full(out_shape, np.nan, dtype=np.float32)
-        half = 0.5 * window
-
-        for i, center in enumerate(out_az):
-            lo = center - half
-            hi = center + half
-            idx = np.where((az_sorted >= lo - tol) & (az_sorted <= hi + tol))[0]
-            if idx.size == 0:
-                continue
-            segment = pwr_sorted[idx, :, :, :]
-            with warnings.catch_warnings():
-                warnings.simplefilter("ignore", RuntimeWarning)
-                med = np.nanmedian(segment, axis=0)
-            out_power[i, :, :, :] = np.asarray(med, dtype=np.float32)
-
-        return self._new_grid(
-            out_az,
-            np.array(self.elevations, copy=True),
-            np.array(self.frequencies, copy=True),
-            np.array(self.polarizations, copy=True),
-            rcs_power=out_power,
-            rcs_phase=out_phase,
-            rcs_domain="power_phase",
-        )
-
     @classmethod
     def join_many(cls, *grids, tol=1e-6):
         """Join datasets on union axes; later grids overwrite overlaps."""

@@ -340,9 +340,7 @@ class GrimCutWindow(DatasetOpsMixin, PlotOpsMixin, QMainWindow):
             ("Incoherent +", "btn_incoherent_add"),
             ("Incoherent -", "btn_incoherent_sub"),
             ("Difference", "btn_difference"),
-            ("Axis Crop", "btn_axis_crop"),
             ("Slice", "btn_slice"),
-            ("Medianize", "btn_medianize"),
             ("Stats", "btn_stats"),
             ("Join", "btn_join"),
             ("Overlap", "btn_overlap"),
@@ -359,9 +357,7 @@ class GrimCutWindow(DatasetOpsMixin, PlotOpsMixin, QMainWindow):
             ("Az Shift", "btn_az_shift"),
             ("Round Az", "btn_az_round"),
             ("El Shift", "btn_el_shift"),
-            ("Scale", "btn_scale"),
             ("Offset", "btn_offset"),
-            ("Normalize", "btn_normalize"),
             ("Phase Shift", "btn_phase_shift"),
             ("Resample", "btn_resample"),
             ("Duplicate", "btn_duplicate"),
@@ -374,7 +370,6 @@ class GrimCutWindow(DatasetOpsMixin, PlotOpsMixin, QMainWindow):
 
         ops_row3 = QHBoxLayout()
         for label, attr in (
-            ("Time Gate", "btn_time_gate"),
             ("El->Az360", "btn_el_to_az360"),
             ("Swap El/Az", "btn_swap_el_az"),
         ):
@@ -454,7 +449,6 @@ class GrimCutWindow(DatasetOpsMixin, PlotOpsMixin, QMainWindow):
                 ("Hold", "hold"),
                 ("Clear", "clear"),
                 ("ISAR Image", "isar_image"),
-                ("3D ISAR", "isar_3d"),
             ),
             (
                 ("Fit X", "fit_x"),
@@ -637,8 +631,6 @@ class GrimCutWindow(DatasetOpsMixin, PlotOpsMixin, QMainWindow):
                 controls["azimuth_polar"].clicked.connect(self._plot_azimuth_polar)
             if "isar_image" in controls:
                 controls["isar_image"].clicked.connect(self._plot_isar_image)
-            if "isar_3d" in controls:
-                controls["isar_3d"].clicked.connect(self._plot_isar_3d)
             if "fit_both" in controls:
                 controls["fit_both"].clicked.connect(self._fit_both)
             if "copy" in controls:
@@ -658,9 +650,7 @@ class GrimCutWindow(DatasetOpsMixin, PlotOpsMixin, QMainWindow):
         self.btn_incoherent_add.clicked.connect(self._incoherent_add_selected)
         self.btn_incoherent_sub.clicked.connect(self._incoherent_sub_selected)
         self.btn_difference.clicked.connect(self._difference_selected)
-        self.btn_axis_crop.clicked.connect(self._axis_crop_selected)
         self.btn_slice.clicked.connect(self._slice_selected)
-        self.btn_medianize.clicked.connect(self._medianize_selected)
         self.btn_stats.clicked.connect(self._statistics_selected)
         self.btn_join.clicked.connect(self._join_selected_datasets)
         self.btn_overlap.clicked.connect(self._overlap_selected_datasets)
@@ -669,14 +659,11 @@ class GrimCutWindow(DatasetOpsMixin, PlotOpsMixin, QMainWindow):
         self.btn_az_shift.clicked.connect(self._azimuth_shift_selected)
         self.btn_az_round.clicked.connect(self._azimuth_round_selected)
         self.btn_el_shift.clicked.connect(self._elevation_shift_selected)
-        self.btn_scale.clicked.connect(self._scale_selected)
         self.btn_offset.clicked.connect(self._offset_selected)
-        self.btn_normalize.clicked.connect(self._normalize_selected)
         self.btn_phase_shift.clicked.connect(self._phase_shift_selected)
         self.btn_resample.clicked.connect(self._resample_selected)
         self.btn_duplicate.clicked.connect(self._duplicate_selected)
         self.btn_export_csv.clicked.connect(self._export_csv_selected)
-        self.btn_time_gate.clicked.connect(self._time_gate_selected)
         self.btn_el_to_az360.clicked.connect(self._elevation_to_azimuth_360_selected)
         self.btn_swap_el_az.clicked.connect(self._swap_elevation_azimuth_selected)
         self.btn_dataset_save.clicked.connect(self._save_selected_datasets)
@@ -708,19 +695,12 @@ class GrimCutWindow(DatasetOpsMixin, PlotOpsMixin, QMainWindow):
             context.chk_colorbar.toggled.connect(self._on_waterfall_style_changed)
             context.chk_colorbar_shared.toggled.connect(self._on_waterfall_style_changed)
             context.combo_polar_zero.currentIndexChanged.connect(self._on_polar_zero_changed)
-            context.chk_isar3d_auto_thin.toggled.connect(self._on_isar3d_auto_thin_toggled)
             context.chk_plot_grid_visible.toggled.connect(self._apply_plot_theme)
             context.chk_colormap_invert.toggled.connect(self._on_colormap_changed)
             context.combo_isar_window.currentIndexChanged.connect(self._on_isar_window_changed)
             context.combo_isar_units.currentIndexChanged.connect(self._on_isar_window_changed)
             context.combo_isar_algorithm.currentIndexChanged.connect(self._on_isar_window_changed)
             context.combo_isar_pad.currentIndexChanged.connect(self._on_isar_window_changed)
-            context.spin_isar3d_max_az.valueChanged.connect(self._on_isar_3d_style_changed)
-            context.spin_isar3d_max_el.valueChanged.connect(self._on_isar_3d_style_changed)
-            context.spin_isar3d_max_freq.valueChanged.connect(self._on_isar_3d_style_changed)
-            context.spin_isar3d_max_voxels.valueChanged.connect(self._on_isar_3d_style_changed)
-            context.spin_isar3d_quantile.valueChanged.connect(self._on_isar_3d_style_changed)
-            context.spin_isar3d_point_size.valueChanged.connect(self._on_isar_3d_style_changed)
 
         self._activate_plot_tab("plotting")
         self.main_tabs.currentChanged.connect(self._on_main_tab_changed)
@@ -871,57 +851,8 @@ class GrimCutWindow(DatasetOpsMixin, PlotOpsMixin, QMainWindow):
         chk_colorbar_shared.setChecked(True)
         settings_layout.addWidget(chk_colorbar_shared, row, 3)
         row += 1
-        settings_layout.addWidget(QLabel("3D ISAR Thinning"), row, 0)
-        chk_isar3d_auto_thin = QCheckBox("Auto")
-        chk_isar3d_auto_thin.setChecked(True)
-        settings_layout.addWidget(chk_isar3d_auto_thin, row, 1)
-        settings_layout.addWidget(QLabel("Max Display Points"), row, 2)
-        spin_isar3d_max_voxels = QDoubleSpinBox()
-        spin_isar3d_max_voxels.setRange(1000.0, 500000.0)
-        spin_isar3d_max_voxels.setDecimals(0)
-        spin_isar3d_max_voxels.setSingleStep(1000.0)
-        spin_isar3d_max_voxels.setValue(30000.0)
-        settings_layout.addWidget(spin_isar3d_max_voxels, row, 3)
-        lbl_quantile = QLabel("Threshold (↑=fewer)")
-        lbl_quantile.setToolTip("Voxel significance threshold (quantile). Higher = show only the brightest voxels.")
-        settings_layout.addWidget(lbl_quantile, row, 4)
-        spin_isar3d_quantile = QDoubleSpinBox()
-        spin_isar3d_quantile.setRange(0.0, 1.0)
-        spin_isar3d_quantile.setDecimals(4)
-        spin_isar3d_quantile.setSingleStep(0.0010)
-        spin_isar3d_quantile.setValue(0.9950)
-        settings_layout.addWidget(spin_isar3d_quantile, row, 5)
-        row += 1
-        settings_layout.addWidget(QLabel("3D ISAR Max Az"), row, 0)
-        spin_isar3d_max_az = QDoubleSpinBox()
-        spin_isar3d_max_az.setRange(2.0, 4096.0)
-        spin_isar3d_max_az.setDecimals(0)
-        spin_isar3d_max_az.setSingleStep(1.0)
-        spin_isar3d_max_az.setValue(96.0)
-        settings_layout.addWidget(spin_isar3d_max_az, row, 1)
-        settings_layout.addWidget(QLabel("Max El"), row, 2)
-        spin_isar3d_max_el = QDoubleSpinBox()
-        spin_isar3d_max_el.setRange(2.0, 4096.0)
-        spin_isar3d_max_el.setDecimals(0)
-        spin_isar3d_max_el.setSingleStep(1.0)
-        spin_isar3d_max_el.setValue(64.0)
-        settings_layout.addWidget(spin_isar3d_max_el, row, 3)
-        settings_layout.addWidget(QLabel("Max Freq"), row, 4)
-        spin_isar3d_max_freq = QDoubleSpinBox()
-        spin_isar3d_max_freq.setRange(2.0, 4096.0)
-        spin_isar3d_max_freq.setDecimals(0)
-        spin_isar3d_max_freq.setSingleStep(1.0)
-        spin_isar3d_max_freq.setValue(128.0)
-        settings_layout.addWidget(spin_isar3d_max_freq, row, 5)
-        row += 1
-        settings_layout.addWidget(QLabel("3D ISAR Point Size"), row, 0)
-        spin_isar3d_point_size = QDoubleSpinBox()
-        spin_isar3d_point_size.setRange(1.0, 100.0)
-        spin_isar3d_point_size.setDecimals(1)
-        spin_isar3d_point_size.setSingleStep(0.5)
-        spin_isar3d_point_size.setValue(10.0)
-        settings_layout.addWidget(spin_isar3d_point_size, row, 1)
-        settings_layout.addWidget(QLabel("ISAR Window"), row, 2)
+
+        settings_layout.addWidget(QLabel("ISAR Window"), row, 0)
         combo_isar_window = QComboBox()
         combo_isar_window.addItems([
             "Hanning",
@@ -931,11 +862,11 @@ class GrimCutWindow(DatasetOpsMixin, PlotOpsMixin, QMainWindow):
             "Kaiser β=15",
             "Rectangular",
         ])
-        settings_layout.addWidget(combo_isar_window, row, 3)
-        settings_layout.addWidget(QLabel("ISAR Units"), row, 4)
+        settings_layout.addWidget(combo_isar_window, row, 1)
+        settings_layout.addWidget(QLabel("ISAR Units"), row, 2)
         combo_isar_units = QComboBox()
         combo_isar_units.addItems(["m", "in", "ft"])
-        settings_layout.addWidget(combo_isar_units, row, 5)
+        settings_layout.addWidget(combo_isar_units, row, 3)
         row += 1
 
         settings_layout.addWidget(QLabel("ISAR Algorithm"), row, 0)
@@ -1038,13 +969,6 @@ class GrimCutWindow(DatasetOpsMixin, PlotOpsMixin, QMainWindow):
             combo_colormap=combo_colormap,
             chk_colorbar=chk_colorbar,
             chk_colorbar_shared=chk_colorbar_shared,
-            chk_isar3d_auto_thin=chk_isar3d_auto_thin,
-            spin_isar3d_max_az=spin_isar3d_max_az,
-            spin_isar3d_max_el=spin_isar3d_max_el,
-            spin_isar3d_max_freq=spin_isar3d_max_freq,
-            spin_isar3d_max_voxels=spin_isar3d_max_voxels,
-            spin_isar3d_quantile=spin_isar3d_quantile,
-            spin_isar3d_point_size=spin_isar3d_point_size,
             chk_plot_grid_visible=chk_plot_grid_visible,
             chk_colormap_invert=chk_colormap_invert,
             combo_isar_window=combo_isar_window,
@@ -1103,14 +1027,12 @@ class GrimCutWindow(DatasetOpsMixin, PlotOpsMixin, QMainWindow):
         self.btn_auto_plot = controls.get("auto_plot")
         self.btn_pbp = controls.get("pbp")
         self.btn_isar_image = controls.get("isar_image")
-        self.btn_isar_3d = controls.get("isar_3d")
         self.btn_phase = controls.get("phase")
         self.btn_zoom_box = controls.get("zoom_box")
 
         context = self._plot_contexts[tab_key]
         for field in PlotContext.__dataclass_fields__:
             setattr(self, field, getattr(context, field))
-        self._update_isar3d_thin_controls()
 
     def _on_main_tab_changed(self, index: int) -> None:
         tab_key = self._tab_key_for_index.get(index)
