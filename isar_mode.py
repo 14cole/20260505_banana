@@ -117,16 +117,24 @@ def _resolve_pad(
         return n_az
     # "Auto" — sane default per algorithm
     if algorithm == "polar format" and theta is not None and freq_hz is not None and theta.size >= 2:
-        theta_sorted = np.sort(np.asarray(theta, dtype=float))
-        theta_max_abs = float(np.max(np.abs(theta_sorted)))
+        theta_arr = np.asarray(theta, dtype=float)
+        theta_sorted = np.sort(theta_arr)
         dtheta = float(np.mean(np.diff(theta_sorted)))
         f_c = float(np.mean(freq_hz))
-        f_max = float(np.max(freq_hz))
-        if dtheta > 0.0 and f_c > 0.0 and theta_max_abs > 0.0:
-            # Match decoupled-FFT scene extent: c/(2·f_c·dθ) = 2π·N_kx/kx_span,
-            # with kx_span = 4·k_max·sin(θ_max). Solve for N_kx.
-            n_auto = int(np.ceil(2.0 * f_max * np.sin(theta_max_abs) / (f_c * dtheta)))
-            return max(min(n_auto, 8192), n_az)
+        if dtheta > 0.0 and f_c > 0.0:
+            # Match decoupled-FFT scene extent: c/(2·f_c·dθ) = 2π·N_kx/kx_span.
+            # Compute kx_span from the actual sample positions so this works
+            # for symmetric and one-sided apertures alike.
+            c0 = 299_792_458.0
+            k_max = 2.0 * np.pi * float(np.max(freq_hz)) / c0
+            k_min = 2.0 * np.pi * float(np.min(freq_hz)) / c0
+            sin_t = np.sin(theta_arr)
+            kx_candidates = np.concatenate((2.0 * k_min * sin_t, 2.0 * k_max * sin_t))
+            kx_span = float(kx_candidates.max() - kx_candidates.min())
+            if kx_span > 0.0:
+                decoupled_full_extent = c0 / (2.0 * f_c * dtheta)
+                n_auto = int(np.ceil(decoupled_full_extent * kx_span / (2.0 * np.pi)))
+                return max(min(n_auto, 8192), n_az)
     return n_az
 
 
@@ -154,12 +162,18 @@ def _pfa_polar_to_cart(
     if n_az < 2 or n_freq < 2:
         raise ValueError("PFA needs at least 2 angles and 2 frequencies")
 
-    # Bounding box of the polar arc sector in Cartesian k-space.
+    # Actual bounding box of the polar arcs in Cartesian k-space.
+    # Each (θ_j, f_i) sample sits at (2·k_i·sin θ_j, 2·k_i·cos θ_j); the
+    # corners of the box come from f_min and f_max times the extreme sines
+    # and cosines, which differs for symmetric, one-sided positive, and
+    # one-sided negative apertures.
     th_max_abs = float(np.max(np.abs(theta)))
     kmax = float(k.max())
     kmin = float(k.min())
-    kx_max = 2.0 * kmax * np.sin(th_max_abs)
-    kx_min = -kx_max if theta.min() < 0 else 2.0 * kmin * np.sin(theta.min())
+    sin_t = np.sin(theta)
+    kx_candidates = np.concatenate((2.0 * kmin * sin_t, 2.0 * kmax * sin_t))
+    kx_min = float(kx_candidates.min())
+    kx_max = float(kx_candidates.max())
     ky_min = 2.0 * kmin * np.cos(th_max_abs)
     ky_max = 2.0 * kmax  # at theta=0, cos=1
 
@@ -354,6 +368,29 @@ def _compute_band(
     else:
         complex_image, x_range, y_range = _compute_band_decoupled(
             self, rcs_slice, theta, freq_uniform, df_eff, n_kx, unit_scale
+        )
+
+    # Sanity-check the computed scene extent. If it's NaN/inf or absurdly
+    # large (>10 km), something is degenerate — bail with a useful message
+    # rather than feeding nonsense to the spinboxes and pcolormesh.
+    if (
+        not np.all(np.isfinite(x_range))
+        or not np.all(np.isfinite(y_range))
+        or float(np.max(np.abs(x_range))) > 1.0e4
+        or float(np.max(np.abs(y_range))) > 1.0e4
+    ):
+        x_max_abs = float(np.max(np.abs(x_range))) if np.all(np.isfinite(x_range)) else float("inf")
+        y_max_abs = float(np.max(np.abs(y_range))) if np.all(np.isfinite(y_range)) else float("inf")
+        th_max_deg = float(np.rad2deg(np.max(np.abs(theta))))
+        dth_deg = float(np.rad2deg(np.mean(np.diff(theta)))) if theta.size > 1 else 0.0
+        f_min_ghz = float(np.min(freq_uniform)) / 1e9
+        f_max_ghz = float(np.max(freq_uniform)) / 1e9
+        return (
+            f"ISAR ({algorithm}) produced a degenerate scene extent: "
+            f"x≈±{x_max_abs:.1e}m, y≈±{y_max_abs:.1e}m. "
+            f"Inputs: θ_max={th_max_deg:.4f}°, dθ={dth_deg:.6f}°, "
+            f"f∈[{f_min_ghz:.3f}, {f_max_ghz:.3f}] GHz, n_kx={n_kx}. "
+            f"Likely a too-narrow azimuth selection or unit mismatch."
         )
 
     magnitude = np.abs(complex_image)
