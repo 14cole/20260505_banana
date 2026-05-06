@@ -28,6 +28,49 @@ def _length_unit(name: str | None) -> tuple[str, float]:
     return (key, _LENGTH_UNIT_FACTORS[key]) if key in _LENGTH_UNIT_FACTORS else ("m", 1.0)
 
 
+def _resample_complex_uniform(
+    values: np.ndarray,
+    samples: np.ndarray,
+    axis: int,
+    rel_tol: float = 1e-3,
+) -> tuple[np.ndarray, np.ndarray, float]:
+    """Linearly resample complex `samples` onto a uniform grid along `axis`.
+
+    Returns (uniform_values, resampled_samples, non_uniformity).
+    `non_uniformity` is the relative spread of the original spacings —
+    `(max_diff - min_diff) / median_diff`. When this is below `rel_tol`,
+    the inputs are returned unchanged (no work done) and the value is
+    reported so callers can warn the user.
+
+    Real and imaginary components are interpolated separately — that's
+    what np.interp expects, and for ISAR it's what you want anyway since
+    interpolating |z| or arg(z) introduces phase-wrap artefacts.
+    """
+    values = np.asarray(values, dtype=float)
+    if values.size < 3:
+        return values, samples, 0.0
+    diffs = np.diff(values)
+    median_diff = float(np.median(diffs))
+    if median_diff <= 0.0:
+        return values, samples, 0.0
+    non_uniformity = float(np.max(diffs) - np.min(diffs)) / median_diff
+    if non_uniformity < rel_tol:
+        return values, samples, non_uniformity
+
+    target = np.linspace(values[0], values[-1], values.size)
+    samples = np.moveaxis(samples, axis, -1)
+    flat_in = samples.reshape(-1, samples.shape[-1])
+    flat_out = np.empty_like(flat_in)
+    for i in range(flat_in.shape[0]):
+        flat_out[i, :] = (
+            np.interp(target, values, flat_in[i, :].real)
+            + 1j * np.interp(target, values, flat_in[i, :].imag)
+        )
+    out = flat_out.reshape(samples.shape)
+    out = np.moveaxis(out, -1, axis)
+    return target, out, non_uniformity
+
+
 def _split_into_bands(indices: list[int]) -> list[list[int]]:
     if not indices:
         return []
@@ -278,23 +321,39 @@ def _compute_band(
         return "ISAR imaging requires phase-aware samples; selected data has no finite rcs_phase."
     rcs_slice = np.where(np.isfinite(rcs_slice), rcs_slice, 0.0)
 
+    # Resample non-uniform input onto uniform grids. Decoupled FFT *requires*
+    # uniform sampling (fftfreq math); even PFA's linear interpolation gives
+    # noticeably crisper edges when input is regularised first.
+    az_uniform, rcs_slice, az_nonuniformity = _resample_complex_uniform(
+        az_values, rcs_slice, axis=0
+    )
+    freq_uniform, rcs_slice, fr_nonuniformity = _resample_complex_uniform(
+        freq_hz, rcs_slice, axis=1
+    )
+    theta = np.deg2rad(az_uniform)
+    if freq_uniform.size >= 2:
+        df_eff = float(np.mean(np.diff(freq_uniform)))
+    else:
+        df_eff = df
+    az_values = az_uniform
+
     pad_target = _resolve_pad(
         pad_choice,
         theta.size,
         len(freq_indices_sorted),
         algorithm=algorithm,
         theta=theta,
-        freq_hz=freq_hz,
+        freq_hz=freq_uniform,
     )
     n_kx = max(pad_target, theta.size)
 
     if algorithm == "polar format":
         complex_image, x_range, y_range = _compute_band_pfa(
-            self, rcs_slice, theta, freq_hz, n_kx, unit_scale
+            self, rcs_slice, theta, freq_uniform, n_kx, unit_scale
         )
     else:
         complex_image, x_range, y_range = _compute_band_decoupled(
-            self, rcs_slice, theta, freq_hz, df, n_kx, unit_scale
+            self, rcs_slice, theta, freq_uniform, df_eff, n_kx, unit_scale
         )
 
     magnitude = np.abs(complex_image)
@@ -308,6 +367,8 @@ def _compute_band(
         "isar_display": isar_display,
         "x_range": x_range,
         "y_range": y_range,
+        "az_nonuniformity": az_nonuniformity,
+        "freq_nonuniformity": fr_nonuniformity,
     }
 
 
@@ -483,7 +544,21 @@ def render(self) -> None:
     self.spin_plot_ymax.blockSignals(False)
 
     self._apply_plot_limits()
-    if n_bands == 1:
-        self.status.showMessage(f"ISAR image updated ({algo_label}).")
-    else:
-        self.status.showMessage(f"ISAR image updated ({algo_label}, {n_bands} bands).")
+
+    # Surface any resampling that happened so the user knows their input
+    # wasn't on a uniform grid. The number is the relative spread of native
+    # spacings ((max-min)/median); anything > ~0.001 was actually resampled.
+    az_max = max(br.get("az_nonuniformity", 0.0) for br in band_results)
+    fr_max = max(br.get("freq_nonuniformity", 0.0) for br in band_results)
+    parts = [f"ISAR image updated ({algo_label}"]
+    if n_bands > 1:
+        parts.append(f", {n_bands} bands")
+    parts.append(")")
+    notes = []
+    if az_max >= 1e-3:
+        notes.append(f"resampled azimuth (Δ-spread {az_max*100:.1f}%)")
+    if fr_max >= 1e-3:
+        notes.append(f"resampled frequency (Δ-spread {fr_max*100:.1f}%)")
+    if notes:
+        parts.append(" — " + ", ".join(notes))
+    self.status.showMessage("".join(parts))
